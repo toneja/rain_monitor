@@ -294,6 +294,31 @@ daily_wet_hours = wet.resample("D").sum() * interval_h
 print(daily_wet_hours)
 ```
 
+## Viewing the logs
+
+`viewer/rain_monitor_viewer.py` is a desktop app (Python, tkinter, matplotlib) that opens the CSV files and plots them.
+
+```
+pip install -r viewer/requirements.txt
+python viewer/rain_monitor_viewer.py                     # then Open CSV...
+python viewer/rain_monitor_viewer.py RAIN0003.CSV        # open a log directly
+python viewer/rain_monitor_viewer.py RAIN0003.CSV --png plots/   # no window: save every plot as a PNG
+```
+
+tkinter comes with most Python installs (on Debian/Ubuntu: `sudo apt install python3-tk`). It reads `RAINnnnn.CSV` and also the older `WETnnnn.CSV` logs from every firmware version that has a leaf reading, and fills in anything an older log lacks (for example it replays the rain test on logs from before `rain_sig` existed). Times in the logs are UTC. The "Show times as UTC +" box shifts every plot and table to your local time.
+
+| Tab | What it shows |
+|---|---|
+| Overview | Summary of the log (rain, wet time, events, air) and a day-by-day table |
+| Timeline | Leaf reading shaded by state (RAIN, WET, DEW) with gauge tips, rain per 10 minutes and the running total, the rain evidence the firmware sees, and the air |
+| Rain events | Every rain event with its tips, duration, how many minutes the leaf noticed the rain before the gauge did, and a zoomed plot of the one you click. Events with no tip are the light rain or drizzle the gauge missed (or false alarms) |
+| Rain intensity | Leaf zig-zag against the gauge's rain rate, and hour by hour |
+| Day by hour | One row per day, one cell per hour: dry, wet or raining, with gauge tips drawn on top |
+| Temperature and degree-days | Air temperature and dew point, cumulative degree-days, and degree-days per day |
+| Tune the detector | Sliders for the rain thresholds (`RAIN_RISE_MV`, `RAIN_ACTIVITY_MV`, the two windows and the hold time). The leaf-only rain test is replayed live, and a scorecard shows how many gauge tips it caught, how many rain periods had no tip, and how far ahead of the gauge the leaf notices rain |
+
+Every plot has the matplotlib toolbar (zoom, pan, save as PNG). The "Tune the detector" tab is the quickest way to check a threshold against a log with real gauge data before changing it in the sketch.
+
 ## Limitations
 
 - **Degree-days are only as good as `temp_c`.** Today that is the BME680 inside a sealed box, which reads warmer than the air in sun and lags the weather, so degree-days will run high. Re-check them once a shielded SHT31 is fitted. The total restarts at zero on every reset, so deploy on stable power or add the previous total back when analysing.
