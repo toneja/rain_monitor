@@ -17,6 +17,7 @@ tkinter ships with most Python installs (on Debian/Ubuntu: sudo apt install pyth
 import argparse
 import os
 import sys
+import textwrap
 import time
 
 import numpy as np
@@ -41,11 +42,8 @@ BLUE, ORANGE, GREEN, RED, PURPLE, SKY, GREY = (
     "#6b7280",
 )
 
-STATE_COLOURS = {
-    "RAIN": "#2b6cb0",
-    "WET": "#90cdf4",
-    "DEW": "#38b2ac",
-}  # DRY is left unshaded
+# One fill colour per state, used by every plot and by the colour key in the window.
+STATE_FILL = {"DRY": "#f1ede4", "WET": "#d6eaf8", "DEW": "#bfe8e3", "RAIN": "#8fbce6"}
 
 matplotlib.rcParams.update(
     {
@@ -270,7 +268,7 @@ def daily_table(d):
 
 
 def state_runs(d):
-    """Yield (start, end, state) for each stretch of one non-DRY state."""
+    """Yield (start, end, state) for each stretch of one state."""
     s = d["state"].values
     t = d["t"].values
     if len(s) == 0:
@@ -278,7 +276,7 @@ def state_runs(d):
     start = 0
     for i in range(1, len(s) + 1):
         if i == len(s) or s[i] != s[start]:
-            if s[start] in STATE_COLOURS:
+            if s[start] in STATE_FILL:
                 yield t[start], t[min(i, len(s) - 1)], s[start]
             start = i
 
@@ -352,6 +350,396 @@ def summary_text(d, events):
     return "\n".join(L)
 
 
+def narrative(d, events):
+    """The log in a few plain sentences, for someone who has never seen one."""
+    dt = d.attrs["dt"]
+    hours = len(d) * dt / 3600
+    out = [
+        f"This log covers {hours:.1f} hours, from {d['t'].iloc[0]:%b %d %H:%M} to {d['t'].iloc[-1]:%b %d %H:%M}."
+    ]
+    if not d.attrs["has_clock"]:
+        out.append(
+            "It has no real clock time, so times are counted from when the logger started."
+        )
+    if d.attrs["has_gauge"]:
+        tips = int(d["tips"].sum())
+        out.append(
+            f"The rain gauge caught {tips * 0.1:.1f} mm ({tips} tip{'s' if tips != 1 else ''})."
+            if tips
+            else "The rain gauge recorded no rain."
+        )
+    else:
+        out.append(
+            "This log has no rain gauge data, so rain is judged from the leaf sensor alone."
+        )
+    if len(events):
+        n = len(events)
+        leaf_only = int((events["tips"] == 0).sum())
+        s = f"The logger found {n} rain event{'s' if n != 1 else ''}"
+        if not d.attrs["has_gauge"]:
+            s += "."
+        elif leaf_only:
+            s += f", {leaf_only} of them seen only by the leaf sensor (light rain or drizzle too fine for the gauge, or a false alarm)."
+        else:
+            s += ", all confirmed by the gauge."
+        out.append(s)
+        lead = events["lead_min"].dropna()
+        if len(lead):
+            m = float(lead.median())
+            if abs(m) < 1:
+                out.append(
+                    "The leaf sensor noticed rain at about the same time as the gauge's first tip."
+                )
+            else:
+                out.append(
+                    f"The leaf sensor noticed rain about {abs(m):.0f} minutes {'before' if m >= 0 else 'after'} "
+                    "the gauge's first tip (median over the events)."
+                )
+    else:
+        out.append("No rain was detected.")
+    if d.attrs["has_state"]:
+        wet = d["state"].isin(["RAIN", "WET", "DEW"])
+        out.append(
+            f"The leaf was wet for {wet.sum() * dt / 3600:.1f} hours ({wet.mean() * 100:.0f}% of the log)."
+        )
+        if len(events):
+            after = d[d["t"] > events["end"].iloc[-1]]
+            dry = after[after["state"] == "DRY"]
+            if len(after) and len(dry):
+                out.append(
+                    f"After the last rain signal it stayed wet for another "
+                    f"{(dry['t'].iloc[0] - events['end'].iloc[-1]).total_seconds() / 3600:.1f} hours."
+                )
+            elif len(after):
+                out.append("It was still wet when the log ended.")
+        n_dew = int(((d["state"] == "DEW") & (d["state"].shift() != "DEW")).sum())
+        if n_dew:
+            out.append(
+                f"{n_dew} wet period{'s' if n_dew != 1 else ''} started with no rain at all: dew or fog."
+            )
+    if d.attrs["has_air"]:
+        out.append(
+            f"The air in the sensor box ranged from {d['temp_c'].min():.1f} to {d['temp_c'].max():.1f} degC "
+            f"({d['dd'].iloc[-1] - d['dd'].iloc[0]:.1f} degree-days above 0 degC)."
+        )
+    gaps = int((np.diff(d["uptime_s"]) > 2.5 * dt).sum())
+    if gaps:
+        out.append(
+            f"Warning: the data has {gaps} gap{'s' if gaps != 1 else ''} (power loss or SD trouble)."
+        )
+    return " ".join(out)
+
+
+# ---------------------------------------------------------------------------
+#  Help text. Shown in the Help tab; the short captions sit at the top of each tab.
+# ---------------------------------------------------------------------------
+
+CAPTIONS = {
+    "Overview": "The log in plain words, then the numbers. The table on the right is one row per day (your local time).",
+    "Timeline": "Everything on one time axis. Top: the leaf sensor reading, shaded by what the logger decided "
+    "(colour key at the top of the window); orange ticks along the bottom are rain gauge tips. Below: rain "
+    "per 10 minutes with the running total, the evidence the logger uses to spot rain, and the air. "
+    "Use the toolbar under the plot to zoom and pan.",
+    "Rain events": "Each row is one stretch of rain, made by joining rain signals that are close together. "
+    "'Leaf leads gauge' is how many minutes the leaf noticed the rain before the first gauge tip "
+    "(blank: the gauge never tipped). Click a row to zoom in on it.",
+    "Rain intensity": "Does the leaf tell you how hard it is raining? Left: each dot is 10 minutes. Higher = more rain "
+    "at the gauge, further right = a more jumpy leaf reading. Right: the same thing hour by hour.",
+    "Day by hour": "One row per day, one box per hour (your local time). Sand = dry, light blue = wet, blue = raining, "
+    "white = no data. Orange dots are gauge tips (bigger = more). The bars show each day's rainfall.",
+    "Temperature and degree-days": "Top: air temperature and dew point inside the sensor box; when the two lines meet, "
+    "dew is possible. Bottom: degree-days above 0 degC, added up over the log.",
+    "Tune the detector": "For anyone adjusting the firmware. Move a slider and the leaf-only rain test is replayed on "
+    "this log. Blue shading = the leaf says it is raining; compare it with the orange gauge ticks.",
+}
+
+# Each section: (key, title, [paragraphs]). A paragraph is a string, ("swatch", state, text),
+# ("term", name, text) or ("bullet", text).
+HELP = [
+    (
+        "start",
+        "What am I looking at?",
+        [
+            "The rain monitor sits in the vineyard canopy and writes one row to its SD card every 10 seconds. "
+            "It senses rain in two different ways, and this viewer lines them up so you can see what each one noticed.",
+            (
+                "term",
+                "Rain gauge (tipping bucket)",
+                "Every 0.1 mm of rain tips a small bucket and the tip is logged. Accurate amounts, but it cannot see "
+                "drizzle too light to fill a bucket, and it only reports after the water has arrived.",
+            ),
+            (
+                "term",
+                "Leaf wetness sensor (PHYTOS31)",
+                "A flat sensor that reads higher the more water is on its surface. It reacts within seconds to the lightest "
+                "rain and shows how long the leaf stays wet afterwards, but it has no units of rain: it reads in millivolts "
+                "(mV), not millimetres.",
+            ),
+            "From the two, the logger decides at every sample whether the leaf is dry, wet or being rained on, and counts "
+            "the time since the last rain. When it rained, how much, and how long leaves stayed wet are the inputs that "
+            "vineyard disease-risk models need.",
+            (
+                "bullet",
+                "Open a log with 'Open CSV...' in the top bar. It reads RAINnnnn.CSV and the older WETnnnn.CSV files.",
+            ),
+            (
+                "bullet",
+                "Times in the logs are UTC. The box in the top bar shifts everything to your local time.",
+            ),
+            (
+                "bullet",
+                "Start with the Overview tab, then the Timeline. Every tab has a short note at the top, and "
+                "'More help' (or F1) opens the matching section here.",
+            ),
+        ],
+    ),
+    (
+        "colours",
+        "Colour key",
+        [
+            ("swatch", "DRY", "DRY: the leaf is at its dry level."),
+            (
+                "swatch",
+                "WET",
+                "WET: the leaf is wet, but there has been no rain signal for 30 minutes. Rain has stopped "
+                "and the leaf is still drying. Also used when the logger starts on an already wet leaf.",
+            ),
+            (
+                "swatch",
+                "DEW",
+                "DEW: the leaf is wet and there has been no rain at all in this wet period: dew or fog.",
+            ),
+            (
+                "swatch",
+                "RAIN",
+                "RAIN: the leaf is wet and the logger saw a rain signal (leaf or gauge) in the last 30 minutes.",
+            ),
+            "In the plots:",
+            (
+                "bullet",
+                "Dark line: the leaf sensor reading in mV. Dashed grey line: the dry baseline it learned.",
+            ),
+            (
+                "bullet",
+                "Orange ticks or dots: a rain gauge tip (0.1 mm). Orange line: the running rainfall total, or the temperature.",
+            ),
+            (
+                "bullet",
+                "Blue line in the 'rain evidence' panel: how far the reading rose in 10 minutes. Red: how much it zig-zagged "
+                "in the last minute. Dotted lines: the thresholds the firmware uses.",
+            ),
+            (
+                "bullet",
+                "Dashed light blue line: dew point. Light blue line on the right-hand axis: relative humidity.",
+            ),
+        ],
+    ),
+    (
+        "terms",
+        "Glossary",
+        [
+            (
+                "term",
+                "mV (millivolts)",
+                "The leaf sensor's raw reading. In these logs a dry sensor reads about 350-365 mV and "
+                "a soaked one 550-680 mV. It is a relative signal, not a calibrated wetness percentage.",
+            ),
+            (
+                "term",
+                "Dry baseline",
+                "The reading when the sensor is dry. The logger learns it by itself and ignores slow drift "
+                "while it is dry. 'Wet' means 20 mV or more above it.",
+            ),
+            (
+                "term",
+                "Rain signal",
+                "The moment the logger decides water is arriving. It happens when the reading rises 4 mV "
+                "or more in 10 minutes, or zig-zags 0.3 mV or more per sample over the last minute, or the "
+                "gauge tips.",
+            ),
+            (
+                "term",
+                "Rise over 10 minutes",
+                "The reading now minus the reading 10 minutes ago. Rain pushes it up; dew and "
+                "temperature drift move it far more slowly.",
+            ),
+            (
+                "term",
+                "Zig-zag",
+                "How much the reading jumps up and down: drops landing and running off. A smooth rise or fall "
+                "(like drying) scores zero however fast it moves. Heavier rain zig-zags more.",
+            ),
+            (
+                "term",
+                "Hold (30 minutes)",
+                "Rain stays 'active' for 30 minutes after the last rain signal, so a short pause "
+                "does not split one storm in two. 'Time since last rain' counts from the last signal.",
+            ),
+            (
+                "term",
+                "Rain event",
+                "One stretch of rain: rain signals less than 30 minutes apart (you can change this on the "
+                "Rain events tab) joined together.",
+            ),
+            (
+                "term",
+                "Leaf only event",
+                "An event with no gauge tip. Either light rain or drizzle under the gauge's 0.1 mm "
+                "step, or a false alarm. The gauge cannot tell you which.",
+            ),
+            ("term", "Tip", "One tip of the rain gauge's bucket: 0.1 mm of rain."),
+            (
+                "term",
+                "Degree-days",
+                "Heat added up over time: 1 degree-day is 1 degC above 0 degC for 24 hours. It counts from "
+                "when the logger was switched on.",
+            ),
+            (
+                "term",
+                "Dew point and its depression",
+                "The temperature at which the air would start to form dew. The closer the "
+                "air temperature is to it (small depression), the more likely dew is.",
+            ),
+            ("term", "RH", "Relative humidity of the air, in percent."),
+        ],
+    ),
+    (
+        "Overview",
+        "Overview tab",
+        [
+            "The first paragraph is the whole log in plain words. Under it are the details, and on the right a table with one row per day.",
+            (
+                "bullet",
+                "'Rain mm' comes from the gauge only. 'Rain h' is hours in the RAIN state; 'wet h' is hours the leaf was wet.",
+            ),
+            (
+                "bullet",
+                "Gaps in the data mean the logger lost power or the SD card stopped writing.",
+            ),
+        ],
+    ),
+    (
+        "Timeline",
+        "Timeline tab",
+        [
+            "What to look for in the top panel:",
+            (
+                "bullet",
+                "A steep climb of the dark line: rain starting. A staircase of small steps: light rain, each step a drop landing.",
+            ),
+            (
+                "bullet",
+                "A sudden drop: water running off the sensor. A slow fall over hours: drying.",
+            ),
+            (
+                "bullet",
+                "A line stuck high for hours with no gauge tips: the leaf is still wet after the rain.",
+            ),
+            (
+                "bullet",
+                "Orange ticks with no line movement around them are rare. A climb with no ticks is light rain the gauge missed.",
+            ),
+            "Under it: rain per 10 minutes with the running total, then the two signals the logger uses to spot rain, then the air.",
+        ],
+    ),
+    (
+        "Rain events",
+        "Rain events tab",
+        [
+            "Each row is an event: when it started and ended, how long, tips and millimetres, how many minutes before the first "
+            "tip the leaf noticed it, and how far the leaf reading climbed.",
+            (
+                "bullet",
+                "A bigger 'merge' number joins nearby events into one; a smaller number splits them.",
+            ),
+            (
+                "bullet",
+                "'leaf only' rows had no gauge tip. A tip count of zero with a clear rise on the plot is most likely drizzle.",
+            ),
+            (
+                "bullet",
+                "The plot shows the event with 45 minutes either side. Red dots are the moments the logger saw rain.",
+            ),
+        ],
+    ),
+    (
+        "Rain intensity",
+        "Rain intensity tab",
+        [
+            "Left: each dot is 10 minutes. If dots climb to the right, a more jumpy leaf goes with harder rain, which would let "
+            "the leaf estimate rain rate in steps finer than the gauge's 0.1 mm. The orange line is the average per band and "
+            "the number is the correlation (1 = perfect).",
+            "Right: gauge rainfall per hour (bars) with the leaf zig-zag (line). They should rise and fall together.",
+            "With few tips there is nothing to conclude. This needs a log with real rain.",
+        ],
+    ),
+    (
+        "Day by hour",
+        "Day by hour tab",
+        [
+            "A quick picture of many days. Long light-blue stretches after a dark blue patch are the hours the leaves stayed wet "
+            "after rain, which matters most for disease. White boxes are hours with no data.",
+        ],
+    ),
+    (
+        "Temperature and degree-days",
+        "Temperature and degree-days tab",
+        [
+            "The temperature is the air inside the sealed sensor box, so it reads warmer than the open air in sun and lags the "
+            "weather. Treat it, and the degree-days built from it, as a rough guide until a shielded outdoor sensor is fitted.",
+            "Degree-days restart at zero every time the logger is switched on. The small bar chart shows degree-days per day.",
+        ],
+    ),
+    (
+        "Tune the detector",
+        "Tune the detector tab",
+        [
+            "This replays the leaf-only rain test of the firmware on the open log with the thresholds you choose. The gauge is "
+            "used only to score it.",
+            (
+                "bullet",
+                "Lower thresholds find lighter rain but risk false alarms from drift or noise.",
+            ),
+            (
+                "bullet",
+                "'Rain periods with no tip' grows when you lower a threshold. Those may be real drizzle or false alarms; "
+                "only a second record of the weather can tell you which.",
+            ),
+            (
+                "bullet",
+                "Sliders here do not change the device. To use new values, edit the constants of the same names in rain_monitor.ino.",
+            ),
+        ],
+    ),
+    (
+        "caveats",
+        "Things to keep in mind",
+        [
+            (
+                "bullet",
+                "The gauge only reports rain in 0.1 mm steps, and a dry funnel absorbs the first little bit. Drizzle often never tips it.",
+            ),
+            (
+                "bullet",
+                "The leaf sensor can stay wet for hours after rain, especially in cool, cloudy, humid weather. That is real wetness.",
+            ),
+            (
+                "bullet",
+                "Moving the sensor, spraying it, or wiping it makes the reading jump about and can look like rain.",
+            ),
+            (
+                "bullet",
+                "The air temperature, humidity and dew point come from a sensor in a sealed box and are only a rough guide.",
+            ),
+            (
+                "bullet",
+                "Thresholds were set from a few logs from one site. Check them against your own gauge data on the tuning tab.",
+            ),
+        ],
+    ),
+]
+
+
 # ---------------------------------------------------------------------------
 #  Plots. Each takes an empty Figure and a loaded log, and draws on it.
 # ---------------------------------------------------------------------------
@@ -396,7 +784,7 @@ def plot_timeline(fig, d):
     a1, a2, a3, a4 = axs
 
     for s, e, st in state_runs(d):
-        a1.axvspan(s, e, color=STATE_COLOURS[st], alpha=0.22, lw=0)
+        a1.axvspan(s, e, color=STATE_FILL[st], lw=0)
     a1.plot(d["t"], d["mv"], color="#1f2937", lw=0.9, label="leaf reading")
     if d["baseline_mv"].notna().any():
         a1.plot(
@@ -409,9 +797,9 @@ def plot_timeline(fig, d):
     if d.attrs["has_state"]:
         from matplotlib.patches import Patch
 
-        for st, c in STATE_COLOURS.items():
+        for st, c in STATE_FILL.items():
             if (d["state"] == st).any():
-                handles.append(Patch(color=c, alpha=0.4))
+                handles.append(Patch(facecolor=c, edgecolor=GREY, linewidth=0.6))
                 labels.append(st)
     a1.legend(handles, labels, ncol=6, loc="upper left")
 
@@ -496,7 +884,7 @@ def plot_event(fig, d, events, i, margin_min=45):
         2, 1, sharex=True, gridspec_kw=dict(height_ratios=[3, 1.4], hspace=0.1)
     )
     for s, e, st in state_runs(seg.reset_index(drop=True)):
-        a1.axvspan(s, e, color=STATE_COLOURS[st], alpha=0.22, lw=0)
+        a1.axvspan(s, e, color=STATE_FILL[st], lw=0)
     a1.plot(seg["t"], seg["mv"], color="#1f2937", lw=1.1)
     sig = seg[seg["sig"]]
     a1.plot(sig["t"], sig["mv"], ".", color=RED, ms=3, label="rain signal")
@@ -633,7 +1021,7 @@ def plot_barcode(fig, d):
         v = 2 if row["rain"] >= 0.1 else (1 if row["wet"] >= 0.5 else 0)
         grid[days.index(dy), hr] = v
         dot[days.index(dy), hr] = tips.loc[(dy, hr)]
-    cmap = ListedColormap(["#f1ede4", "#9ecae1", "#08519c"])
+    cmap = ListedColormap([STATE_FILL["DRY"], STATE_FILL["WET"], STATE_FILL["RAIN"]])
     cmap.set_bad("white")
     a, b = fig.subplots(1, 2, gridspec_kw=dict(width_ratios=[3.2, 1], wspace=0.08))
     a.grid(False)
@@ -654,7 +1042,7 @@ def plot_barcode(fig, d):
     a.set_yticks(range(len(days)))
     a.set_yticklabels([str(x) for x in days])
     a.set_title(
-        "each hour of each day:  dry (sand)   wet (light blue)   raining (dark blue)"
+        "each hour of each day:  dry (sand)   wet (light blue, includes dew)   raining (blue)"
     )
     a.legend(loc="lower right")
     a.spines[:].set_visible(False)
@@ -822,7 +1210,7 @@ def export_png(d, outdir):
     with open(
         os.path.join(outdir, os.path.splitext(d.attrs["name"])[0] + "_summary.txt"), "w"
     ) as f:
-        f.write(summary_text(d, events) + "\n")
+        f.write(narrative(d, events) + "\n\n" + summary_text(d, events) + "\n")
 
 
 # ---------------------------------------------------------------------------
@@ -838,11 +1226,46 @@ def run_gui(paths, utc_offset):
         NavigationToolbar2Tk,
     )
 
-    class PlotPane(ttk.Frame):
-        """A matplotlib figure with its toolbar (zoom, pan, save as PNG)."""
+    class Tip:
+        """A small hover note for a widget."""
 
-        def __init__(self, parent, size=(9, 6)):
+        def __init__(self, widget, text):
+            self.widget, self.text, self.win = widget, text, None
+            widget.bind("<Enter>", self.show)
+            widget.bind("<Leave>", self.hide)
+
+        def show(self, event=None):
+            if self.win:
+                return
+            x = self.widget.winfo_rootx() + 12
+            y = self.widget.winfo_rooty() + self.widget.winfo_height() + 4
+            self.win = tk.Toplevel(self.widget)
+            self.win.wm_overrideredirect(True)
+            self.win.wm_geometry(f"+{x}+{y}")
+            tk.Label(
+                self.win,
+                text=self.text,
+                justify="left",
+                background="#fffbe6",
+                relief="solid",
+                borderwidth=1,
+                wraplength=320,
+                padx=6,
+                pady=4,
+            ).pack()
+
+        def hide(self, event=None):
+            if self.win:
+                self.win.destroy()
+                self.win = None
+
+    class PlotPane(ttk.Frame):
+        """A matplotlib figure with its toolbar (zoom, pan, save as PNG), under a short note on what it shows."""
+
+        def __init__(self, parent, app=None, tab=None, size=(9, 6)):
             super().__init__(parent)
+            if app is not None:
+                app.add_caption(self, tab)
             self.fig = Figure(figsize=size, dpi=100)
             self.canvas = FigureCanvasTkAgg(self.fig, master=self)
             NavigationToolbar2Tk(self.canvas, self).update()
@@ -867,6 +1290,10 @@ def run_gui(paths, utc_offset):
             self._build()
             for p in paths:
                 self.open_file(p)
+            if not paths:
+                self.tabs.select(self.t_help)  # first launch: start on the guide
+            else:
+                self.tabs.select(self.t_over)
 
         # ----- layout -----
         def _build(self):
@@ -894,17 +1321,92 @@ def run_gui(paths, utc_offset):
             ttk.Label(bar, text="h  (log times are UTC)", foreground="#6b7280").pack(
                 side="left"
             )
+            Tip(self.picker, "Switch between the logs you have opened.")
+            Tip(
+                sp,
+                "The logger writes UTC. Enter your hours from UTC (Pacific standard time is -8) "
+                "and every plot and table is shown in local time.",
+            )
+
+            # Colour key that stays visible on every tab
+            key = ttk.Frame(bar)
+            key.pack(side="right")
+            ttk.Label(key, text="Key: ").pack(side="left")
+            for state, note in (
+                ("DRY", "leaf dry"),
+                ("WET", "wet, rain stopped"),
+                ("DEW", "wet, no rain: dew or fog"),
+                ("RAIN", "wet and raining"),
+            ):
+                lab = tk.Label(
+                    key,
+                    text=f" {state} ",
+                    background=STATE_FILL[state],
+                    relief="solid",
+                    borderwidth=1,
+                )
+                lab.pack(side="left", padx=2)
+                Tip(lab, note)
+            gauge = tk.Label(key, text=" | gauge tip ", foreground=ORANGE)
+            gauge.pack(side="left", padx=2)
+            Tip(
+                gauge,
+                "Orange ticks and dots in the plots are rain gauge tips: 0.1 mm each.",
+            )
+
+            menubar = tk.Menu(self)
+            helpmenu = tk.Menu(menubar, tearoff=0)
+            helpmenu.add_command(
+                label="Guide to this tab   (F1)", command=self.help_for_current
+            )
+            helpmenu.add_command(
+                label="What am I looking at?", command=lambda: self.show_help("start")
+            )
+            helpmenu.add_command(
+                label="Colour key", command=lambda: self.show_help("colours")
+            )
+            helpmenu.add_command(
+                label="Glossary", command=lambda: self.show_help("terms")
+            )
+            helpmenu.add_command(
+                label="Things to keep in mind",
+                command=lambda: self.show_help("caveats"),
+            )
+            menubar.add_cascade(label="Help", menu=helpmenu)
+            self.config(menu=menubar)
+            self.bind("<F1>", lambda e: self.help_for_current())
 
             self.tabs = ttk.Notebook(self)
             self.tabs.pack(fill="both", expand=True)
             self.tabs.bind("<<NotebookTabChanged>>", lambda e: self.draw_visible())
 
+            # Help
+            self.t_help = ttk.Frame(self.tabs)
+            self.tabs.add(self.t_help, text="Help")
+            scroll = ttk.Scrollbar(self.t_help)
+            scroll.pack(side="right", fill="y")
+            self.help_text = tk.Text(
+                self.t_help,
+                wrap="word",
+                padx=16,
+                pady=12,
+                yscrollcommand=scroll.set,
+                font=("TkDefaultFont", 11),
+                spacing3=6,
+                cursor="arrow",
+            )
+            self.help_text.pack(fill="both", expand=True)
+            scroll.config(command=self.help_text.yview)
+            self.render_help()
+
             # Overview
             self.t_over = ttk.Frame(self.tabs)
             self.tabs.add(self.t_over, text="Overview")
+            self.add_caption(self.t_over, "Overview")
             paned = ttk.PanedWindow(self.t_over, orient="horizontal")
             paned.pack(fill="both", expand=True)
             self.text = tk.Text(paned, font=("Courier", 10), wrap="none", width=70)
+            self.text.tag_configure("head", font=("Courier", 10, "bold"))
             paned.add(self.text, weight=3)
             right = ttk.Frame(paned)
             paned.add(right, weight=2)
@@ -922,12 +1424,13 @@ def run_gui(paths, utc_offset):
             self.day_tree.pack(fill="both", expand=True, padx=6)
 
             # Timeline
-            self.timeline = PlotPane(self.tabs)
+            self.timeline = PlotPane(self.tabs, self, "Timeline")
             self.tabs.add(self.timeline, text="Timeline")
 
             # Events
             self.t_events = ttk.Frame(self.tabs)
             self.tabs.add(self.t_events, text="Rain events")
+            self.add_caption(self.t_events, "Rain events")
             top = ttk.Frame(self.t_events, padding=6)
             top.pack(fill="x")
             ttk.Label(top, text="Merge signals closer than").pack(side="left")
@@ -942,6 +1445,11 @@ def run_gui(paths, utc_offset):
             )
             g.pack(side="left", padx=4)
             g.bind("<Return>", lambda e: self.refresh_events())
+            Tip(
+                g,
+                "Rain signals closer together than this are one event. A storm with a short pause stays one event; "
+                "lower the number to split it.",
+            )
             ttk.Label(
                 top, text="minutes into one event.  Click an event to zoom in."
             ).pack(side="left")
@@ -972,16 +1480,17 @@ def run_gui(paths, utc_offset):
             self.event_pane.pack(fill="both", expand=True)
 
             # Other plots
-            self.intensity = PlotPane(self.tabs)
+            self.intensity = PlotPane(self.tabs, self, "Rain intensity")
             self.tabs.add(self.intensity, text="Rain intensity")
-            self.barcode = PlotPane(self.tabs)
+            self.barcode = PlotPane(self.tabs, self, "Day by hour")
             self.tabs.add(self.barcode, text="Day by hour")
-            self.temp = PlotPane(self.tabs)
+            self.temp = PlotPane(self.tabs, self, "Temperature and degree-days")
             self.tabs.add(self.temp, text="Temperature and degree-days")
 
             # Tuning
             self.t_tune = ttk.Frame(self.tabs)
             self.tabs.add(self.t_tune, text="Tune the detector")
+            self.add_caption(self.t_tune, "Tune the detector")
             panel = ttk.Frame(self.t_tune, padding=10)
             panel.pack(side="left", fill="y")
             ttk.Label(
@@ -992,15 +1501,50 @@ def run_gui(paths, utc_offset):
             ).pack(anchor="w", pady=(0, 10))
             self.tune_labels = {}
             specs = [
-                ("rise_mv", "RAIN_RISE_MV: rise in 10 min (mV)", 1, 20),
-                ("activity_mv", "RAIN_ACTIVITY_MV: zig-zag (mV)", 0.05, 2),
-                ("zigzag_samples", "ZIGZAG_SAMPLES (x 10 s)", 3, 18),
-                ("rise_samples", "RISE_WINDOW_SAMPLES (x 10 s)", 12, 120),
-                ("hold_min", "RAIN_HOLD (minutes)", 2, 90),
+                (
+                    "rise_mv",
+                    "RAIN_RISE_MV: rise in 10 min (mV)",
+                    1,
+                    20,
+                    "How far the reading must climb within the rise window to count as water arriving. Lower finds "
+                    "lighter rain but risks false alarms from drift. Firmware: 4 mV.",
+                ),
+                (
+                    "activity_mv",
+                    "RAIN_ACTIVITY_MV: zig-zag (mV)",
+                    0.05,
+                    2,
+                    "How much the reading must jump up and down per sample over the last minute (drops landing and "
+                    "running off). Firmware: 0.3 mV.",
+                ),
+                (
+                    "zigzag_samples",
+                    "ZIGZAG_SAMPLES (x 10 s)",
+                    3,
+                    18,
+                    "Length of the zig-zag window in 10-second samples. Shorter = the signal stops sooner after the "
+                    "rain does. Firmware: 6 (one minute).",
+                ),
+                (
+                    "rise_samples",
+                    "RISE_WINDOW_SAMPLES (x 10 s)",
+                    12,
+                    120,
+                    "Length of the rise window in 10-second samples. Firmware: 60 (ten minutes).",
+                ),
+                (
+                    "hold_min",
+                    "RAIN_HOLD (minutes)",
+                    2,
+                    90,
+                    "How long rain stays 'active' after the last signal. Firmware: 30. The longest quiet gap inside "
+                    "one real storm in the sample logs was 27 minutes.",
+                ),
             ]
-            for key, label, lo, hi in specs:
+            for key, label, lo, hi, tip in specs:
                 lab = ttk.Label(panel, text=label)
                 lab.pack(anchor="w")
+                Tip(lab, tip)
                 row = ttk.Frame(panel)
                 row.pack(fill="x", pady=(0, 8))
                 ttk.Scale(
@@ -1036,6 +1580,62 @@ def run_gui(paths, utc_offset):
                 padding=4,
             )
             self.status.pack(fill="x")
+
+        # ----- help -----
+        def add_caption(self, parent, tab):
+            """A one-or-two-line note at the top of a tab, with a link to the full help."""
+            bar = ttk.Frame(parent, padding=(8, 6))
+            bar.pack(side="top", fill="x")
+            ttk.Button(bar, text="More help", command=lambda: self.show_help(tab)).pack(
+                side="right", padx=(8, 0)
+            )
+            ttk.Label(
+                bar,
+                text=CAPTIONS[tab],
+                wraplength=1080,
+                justify="left",
+                foreground="#374151",
+            ).pack(side="left", fill="x", expand=True)
+
+        def render_help(self):
+            t = self.help_text
+            t.tag_configure(
+                "h1", font=("TkDefaultFont", 15, "bold"), spacing1=14, spacing3=6
+            )
+            t.tag_configure("term", font=("TkDefaultFont", 11, "bold"))
+            t.tag_configure("bullet", lmargin1=24, lmargin2=40)
+            for state, colour in STATE_FILL.items():
+                t.tag_configure(
+                    "sw_" + state, background=colour, borderwidth=1, relief="solid"
+                )
+            for key, title, items in HELP:
+                t.mark_set("sec_" + key, "end-1c")
+                t.mark_gravity("sec_" + key, "left")
+                t.insert("end", title + "\n", "h1")
+                for item in items:
+                    if isinstance(item, str):
+                        t.insert("end", item + "\n")
+                    elif item[0] == "swatch":
+                        t.insert("end", "   " + item[1] + "   ", "sw_" + item[1])
+                        t.insert("end", "  " + item[2] + "\n")
+                    elif item[0] == "term":
+                        t.insert("end", item[1] + ".  ", "term")
+                        t.insert("end", item[2] + "\n")
+                    elif item[0] == "bullet":
+                        t.insert("end", "\u2022  " + item[1] + "\n", "bullet")
+            t.config(state="disabled")
+
+        def show_help(self, key):
+            """Jump to a section of the Help tab: a section key, or a tab name."""
+            keys = {k for k, _, _ in HELP}
+            if key not in keys:
+                key = "start"
+            self.tabs.select(self.t_help)
+            self.help_text.yview("sec_" + key)
+
+        def help_for_current(self):
+            name = self.tabs.tab(self.tabs.select(), "text")
+            self.show_help(name)
 
         # ----- loading -----
         def choose_files(self):
@@ -1075,7 +1675,12 @@ def run_gui(paths, utc_offset):
             self.d = d
             self.refresh_events()
             self.text.delete("1.0", "end")
-            self.text.insert("1.0", summary_text(d, self.events))
+            self.text.insert("end", "IN PLAIN WORDS\n", "head")
+            self.text.insert(
+                "end", textwrap.fill(narrative(d, self.events), 72) + "\n\n"
+            )
+            self.text.insert("end", "THE DETAILS\n", "head")
+            self.text.insert("end", summary_text(d, self.events))
             for row in self.day_tree.get_children():
                 self.day_tree.delete(row)
             for _, r in daily_table(d).iterrows():

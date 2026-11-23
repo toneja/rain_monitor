@@ -309,13 +309,22 @@ tkinter comes with most Python installs (on Debian/Ubuntu: `sudo apt install pyt
 
 | Tab | What it shows |
 |---|---|
-| Overview | Summary of the log (rain, wet time, events, air) and a day-by-day table |
+| Help | What the device measures, the colour key, a glossary, and a guide to each tab |
+| Overview | The log in plain words, a summary (rain, wet time, events, air) and a day-by-day table |
 | Timeline | Leaf reading shaded by state (RAIN, WET, DEW) with gauge tips, rain per 10 minutes and the running total, the rain evidence the firmware sees, and the air |
 | Rain events | Every rain event with its tips, duration, how many minutes the leaf noticed the rain before the gauge did, and a zoomed plot of the one you click. Events with no tip are the light rain or drizzle the gauge missed (or false alarms) |
 | Rain intensity | Leaf zig-zag against the gauge's rain rate, and hour by hour |
 | Day by hour | One row per day, one cell per hour: dry, wet or raining, with gauge tips drawn on top |
 | Temperature and degree-days | Air temperature and dew point, cumulative degree-days, and degree-days per day |
 | Tune the detector | Sliders for the rain thresholds (`RAIN_RISE_MV`, `RAIN_ACTIVITY_MV`, the two windows and the hold time). The leaf-only rain test is replayed live, and a scorecard shows how many gauge tips it caught, how many rain periods had no tip, and how far ahead of the gauge the leaf notices rain |
+
+**Built-in help for new users:**
+
+- a **Help** tab (the first tab when you launch without a file) that explains what the device measures, the colour key, a glossary (mV, baseline, rain signal, zig-zag, hold, degree-days and so on), a section per tab on what to look for, and things to keep in mind;
+- a **colour key** in the top bar on every tab (DRY, WET, DEW, RAIN and the orange gauge tip), with a hover note on each;
+- a short **note at the top of every tab** saying what you are looking at, with a **More help** button (or press F1) that jumps to the matching Help section; the **Help** menu has the same entries;
+- an **"In plain words"** paragraph at the top of the Overview tab that describes the open log in a few sentences;
+- **hover tips** on the time-offset box, the event-merge box and every tuning slider.
 
 Every plot has the matplotlib toolbar (zoom, pan, save as PNG). The "Tune the detector" tab is the quickest way to check a threshold against a log with real gauge data before changing it in the sketch.
 
