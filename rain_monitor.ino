@@ -68,6 +68,10 @@
                            raining is still 1, because RAIN stays active for
                            RAIN_HOLD_MS after the last signal.
 
+  Degree-days: the air temperature above DEGREE_DAY_BASE_C (0 degC) is added up
+  continuously and logged as degree_days (cumulative since power-on). It is not
+  saved across resets.
+
   GPS: startup waits (showing a message on the OLED) until the GPS has the date
   and time, so every row has a timestamp. Durations still use the internal clock.
 */
@@ -123,6 +127,7 @@ const int ADC_AVERAGING_SAMPLES = 8;
 
 // ---- Rain gauge ----
 const float RAIN_GAUGE_MM_PER_TIP = 0.1f;  // TR-525M: 0.1 mm (0.004 in) per tip
+const float DEGREE_DAY_BASE_C = 0.0f;      // degree-days count temperature above this
 const int RAIN_HISTORY_HOURS = 24;         // window for the rain_24h_mm value
 const uint32_t TIP_DEBOUNCE_MS = 50;       // ignore closures this soon after a counted tip
                                            // (the switch stays closed ~135 ms per tip)
@@ -197,6 +202,13 @@ struct RainHistory {
   uint32_t slotStartMs;
 };
 
+// Running total of degree-days: 1 degree-day = 1 degC above DEGREE_DAY_BASE_C for 24 hours.
+struct DegreeDays {
+  double total;  // since power-on
+  uint32_t lastMs;
+  bool started;
+};
+
 // All values in seconds, ready for logging and display.
 struct Durations {
   uint32_t wetFor;     // 0 when dry
@@ -218,6 +230,7 @@ BLEClientUart peripheralUart[MAX_PERIPHERALS];                     // one per co
 
 LeafWetness wetness;
 RainHistory rainHistory;  // zero-initialised: empty history, first slot starts at power-on
+DegreeDays degreeDays;    // zero-initialised: nothing accumulated yet
 
 // Written by the rain gauge interrupt, read with interrupts off (see readRainGauge).
 volatile uint32_t tipCount = 0;
@@ -488,6 +501,18 @@ void updateRainHistory(RainHistory& h, uint32_t tipsNow, uint32_t nowMs) {
   h.tipsPerSlot[h.currentSlot] += tipsNow;
 }
 
+// Adds the heat since the previous sample: degrees above the base, times the
+// time elapsed in days. Integrating every sample needs no daily minimum and
+// maximum, and no day boundary. Samples without a valid temperature add nothing.
+void addDegreeDays(DegreeDays& dd, const AirReading& air, uint32_t nowMs) {
+  const double MS_PER_DAY = 86400000.0;
+  if (dd.started && air.valid && air.temperatureC > DEGREE_DAY_BASE_C) {
+    dd.total += (air.temperatureC - DEGREE_DAY_BASE_C) * (nowMs - dd.lastMs) / MS_PER_DAY;
+  }
+  dd.lastMs = nowMs;
+  dd.started = true;
+}
+
 float rainLast24hMm(const RainHistory& h) {
   uint32_t tips = 0;
   for (int i = 0; i < RAIN_HISTORY_HOURS; i++) tips += h.tipsPerSlot[i];
@@ -513,17 +538,17 @@ long secondsSinceLastRain(const LeafWetness& w, uint32_t nowMs) {
 const char* CSV_HEADER =
   "date,time,uptime_s,mv,state,baseline_mv,above_base_mv,rise10m_mv,activity_mv,rain_sig,"
   "wet_dur_s,since_wet_s,since_rain_s,wet_total_s,temp_c,rh_pct,dewpt_c,"
-  "tips,tips_total,rain_mm,since_tip_s";
+  "tips,tips_total,rain_mm,since_tip_s,degree_days";
 
 void formatCsvRow(char* out, size_t outSize, uint32_t nowMs, const UtcTime& utc,
                   float leafMv, const LeafWetness& w, const AirReading& air,
-                  const Durations& d, const RainGauge& gauge) {
+                  const Durations& d, const RainGauge& gauge, double degreeDaysTotal) {
   char timestamp[24];
   formatTimestamp(utc, timestamp, sizeof timestamp);
   unsigned long sinceTip = gauge.everTipped ? secondsBetween(nowMs, gauge.lastTipMs) : 0;
 
   snprintf(out, outSize,
-           "%s,%lu,%.1f,%s,%.1f,%.1f,%.1f,%.2f,%u,%lu,%lu,%lu,%lu,%.1f,%.1f,%.1f,%lu,%lu,%.1f,%lu",
+           "%s,%lu,%.1f,%s,%.1f,%.1f,%.1f,%.2f,%u,%lu,%lu,%lu,%lu,%.1f,%.1f,%.1f,%lu,%lu,%.1f,%lu,%.2f",
            timestamp, (unsigned long)(nowMs / 1000),
            leafMv, stateName(w.state), w.baselineMv, leafMv - w.baselineMv, w.riseMv, w.activityMv,
            (unsigned)w.rainSignal,
@@ -531,7 +556,7 @@ void formatCsvRow(char* out, size_t outSize, uint32_t nowMs, const UtcTime& utc,
            (unsigned long)d.sinceRain, (unsigned long)d.totalWet,
            air.temperatureC, air.humidityPercent, air.dewPointC,
            (unsigned long)gauge.tipsNow, (unsigned long)gauge.tipsTotal,
-           rainfallMm(gauge), sinceTip);
+           rainfallMm(gauge), sinceTip, degreeDaysTotal);
 }
 
 // "raining,rain_24h_mm,seconds_since_last_rain", e.g. "0,2.5,7200".
@@ -831,12 +856,14 @@ void loop() {
   UtcTime utc = readUtcTime();
   RainGauge gauge = readRainGauge();
 
+  addDegreeDays(degreeDays, air, nowMs);
+
   addSample(wetness, leafMv, gauge.tipsNow, nowMs);
   updateRainHistory(rainHistory, gauge.tipsNow, nowMs);
   Durations durations = computeDurations(wetness, nowMs);
 
   char row[240];
-  formatCsvRow(row, sizeof row, nowMs, utc, leafMv, wetness, air, durations, gauge);
+  formatCsvRow(row, sizeof row, nowMs, utc, leafMv, wetness, air, durations, gauge, degreeDays.total);
   logLine(row);
 
   char broadcast[32];

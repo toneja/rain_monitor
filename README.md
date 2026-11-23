@@ -18,6 +18,7 @@ The rain and wetness logic (v8, extended in v10) is deliberately simple: a **lev
 - Wet/dry from the sensor's height above a dry baseline it learns itself (no calibration endpoints), and rain from a rise of a few mV in 10 minutes or a gauge tip: **RAIN**, **WET** (rain stopped, leaf still wet), **DEW** (wet with no rain seen), **DRY**
 - Wet duration, dry duration, time since last rain, and cumulative wet time
 - Air temperature, humidity and dew point from a BME680 (logged for context, not used to classify)
+- Cumulative degree-days above 0 degC (`DEGREE_DAY_BASE_C`), integrated every sample from the air temperature and logged as `degree_days`. Not saved across resets
 - Tipping bucket rain gauge (TR-525M) on `WB_IO3`: interrupt-driven tip counting with debounce, logged as tips per sample, running total, rainfall in mm and time since the last tip. A tip also counts as a rain signal for the state logic
 - UTC timestamps from a u-blox GPS on every row: startup blocks until the GPS has the date and time, and the OLED shows `Waiting for GPS fix` with the satellite count and time waited
 - One CSV row per sample, sent to the SD card (and Serial in debug mode)
@@ -109,6 +110,7 @@ All tunables are at the top of the sketch. Millivolt values are the sensor's out
 | `TIP_DEBOUNCE_MS` | 50 | Closures this soon after a counted tip are ignored |
 | `MAX_PERIPHERALS` | 4 | Bluetooth peripherals the logger stays connected to |
 | `RAIN_HISTORY_HOURS` | 24 | Window for the rain total in the broadcast |
+| `DEGREE_DAY_BASE_C` | 0 | Degree-days count air temperature above this |
 
 **Why `GAIN_TWO`:** the PHYTOS31 can output up to about half its supply (~1.65 V). `GAIN_FOUR` (+/-1.024 V) would clip a fully wet reading.
 
@@ -223,7 +225,7 @@ Because the logger is a central it no longer advertises, so it cannot be reached
 ## CSV reference
 
 ```
-date,time,uptime_s,mv,state,baseline_mv,above_base_mv,rise10m_mv,activity_mv,rain_sig,wet_dur_s,since_wet_s,since_rain_s,wet_total_s,temp_c,rh_pct,dewpt_c,tips,tips_total,rain_mm,since_tip_s
+date,time,uptime_s,mv,state,baseline_mv,above_base_mv,rise10m_mv,activity_mv,rain_sig,wet_dur_s,since_wet_s,since_rain_s,wet_total_s,temp_c,rh_pct,dewpt_c,tips,tips_total,rain_mm,since_tip_s,degree_days
 ```
 
 Rows come every 10 seconds and every column is decided at that rate. `tips` is rain gauge tips since the previous row.
@@ -233,13 +235,13 @@ Rows come every 10 seconds and every column is decided at that rate. `tips` is r
 Dry leaf, GPS time available:
 
 ```
-2026-11-18,05:55:50,370,363.6,DRY,363.6,0.0,0.0,0.01,0,0,0,0,0,10.6,66.2,4.6,0,0,0.0,0
+2026-11-18,05:55:50,370,363.6,DRY,363.6,0.0,0.0,0.01,0,0,0,0,0,10.6,66.2,4.6,0,0,0.0,0,0.00
 ```
 
 The first gauge tip of the rain in `WET0011.CSV` (leaf and gauge both signal rain):
 
 ```
-2026-11-18,06:55:49,3850,453.4,RAIN,364.3,89.1,76.9,1.47,3,750,0,0,750,10.0,61.2,2.8,1,1,0.1,1
+2026-11-18,06:55:49,3850,453.4,RAIN,364.3,89.1,76.9,1.47,3,750,0,0,750,10.0,61.2,2.8,1,1,0.1,1,0.45
 ```
 
 ### Columns
@@ -267,6 +269,7 @@ The first gauge tip of the rain in `WET0011.CSV` (leaf and gauge both signal rai
 | 19 | `tips_total` | count | Tips since power-on. |
 | 20 | `rain_mm` | mm | `tips_total` x 0.1 mm. Rainfall since power-on. |
 | 21 | `since_tip_s` | s | Seconds since the last counted tip. 0 if there has been none since boot (check `tips_total`). |
+| 22 | `degree_days` | degC-days | Cumulative degree-days above `DEGREE_DAY_BASE_C` (0 degC) since power-on: 1 means 1 degC above the base for 24 hours. Added up every sample from `temp_c`; samples with no valid temperature add nothing. Subtract the value at the start and end of a day to get that day's total. |
 
 ### Reading the columns together
 
@@ -293,6 +296,7 @@ print(daily_wet_hours)
 
 ## Limitations
 
+- **Degree-days are only as good as `temp_c`.** Today that is the BME680 inside a sealed box, which reads warmer than the air in sun and lags the weather, so degree-days will run high. Re-check them once a shielded SHT31 is fitted. The total restarts at zero on every reset, so deploy on stable power or add the previous total back when analysing.
 - **Rain gauge counts are since boot.** A reset sets `tips_total` and `rain_mm` back to zero. A bucket that has not yet tipped holds some water, so the log lags the actual rain by up to 0.1 mm and by the time the next tip takes.
 - **No real-time clock.** Durations and `uptime_s` restart at every reset, and so do the baseline and totals. Real dates come from the GPS, and startup waits for it.
 - **No GPS, no logging.** Startup blocks until the GPS has the date and time, so a missing or blocked antenna stops the logger after boot.
