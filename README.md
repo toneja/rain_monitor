@@ -2,8 +2,8 @@
 
 A WisBlock (RAK4631) rainfall logger and monitor for vineyard disease-risk work. It records when it rains, how much, and how long the leaf surface stays wet, using two sources that cover each other's gaps:
 
-- a **TR-525M tipping bucket rain gauge**, which measures rainfall in millimetres but only in 0.1 mm steps, so it cannot see drizzle;
-- a METER **PHYTOS31 leaf wetness sensor**, which responds to the lightest rain and tells you whether the leaf is wet, but gives no millimetres.
+- a **TR-525M tipping bucket rain gauge**, which measures rainfall in millimeters but only in 0.1 mm steps, so it cannot see drizzle;
+- a METER **PHYTOS31 leaf wetness sensor**, which responds to the lightest rain and tells you whether the leaf is wet, but gives no millimeters.
 
 Every 10 seconds it combines them to decide whether it is raining, tracks time since the last rain and the 24-hour rainfall, logs a row to a microSD card (and to Serial when `DEBUG` is on), updates a live OLED readout, and sends a short rain summary to up to four Bluetooth peripherals.
 
@@ -129,7 +129,7 @@ The **baseline** is the dry level. While the leaf is dry it creeps along with sl
 A sample is a **rain signal** (`rain_sig` column) if any of these is true:
 
 - the reading has risen by `RAIN_RISE_MV` or more over the last 10 minutes;
-- the reading has been zig-zagging: over the last minute, the distance it travelled minus its net change, per sample (`activity_mv`), is at least `RAIN_ACTIVITY_MV`. This catches steady or heavy rain on an already wet sensor, where the level has stopped rising but drops keep landing and running off. A smooth rise or fall, such as a leaf drying quickly indoors, scores zero;
+- the reading has been zig-zagging: over the last minute, the distance it traveled minus its net change, per sample (`activity_mv`), is at least `RAIN_ACTIVITY_MV`. This catches steady or heavy rain on an already wet sensor, where the level has stopped rising but drops keep landing and running off. A smooth rise or fall, such as a leaf drying quickly indoors, scores zero;
 - the gauge tipped.
 
 Dew, temperature drift and drying are far slower and smoother than that. Each signal restarts `since_rain_s`, and rain is "active" for `RAIN_HOLD_MS` after the last one.
@@ -156,7 +156,7 @@ At power-up the first reading is the baseline. If it is already `WET_ON_MV` or m
 - The only gauge tip was at 09:37 UTC (01:37 local), and the leaf had risen about 4 mV a few minutes earlier. A light event at about 09:30-10:35 raised it a further 20 mV in small 3-5 mV steps.
 - Once wet, the signal moves in discrete steps of a few mV (up when water arrives, down by 10-14 mV when a drop runs off, for example at 13:15-13:25). It is quiet otherwise: the 60-second noise is under 0.2 mV.
 - With the sensor wet, mV correlated with air temperature at -0.83, and the evening decline (505 to 439 mV from 17:00 to 20:50) happens while the air warms. Drying is slow.
-- v7's 15-minute steps averaged the first ramp into one +15.7 mV step, which is below its 100 mV rain threshold, so it was labelled WET, not RAIN, and never ended.
+- v7's 15-minute steps averaged the first ramp into one +15.7 mV step, which is below its 100 mV rain threshold, so it was labeled WET, not RAIN, and never ended.
 
 Replaying v8 on this log: DRY to RAIN at 06:26 UTC (back-dated to 06:12), then candidate rain signals at 08:06, 09:31, 11:33, 12:30 and 14:45. The 08:06, 11:33, 12:30 and 14:45 signals are single steps of 3-5 mV and **have no independent confirmation**, so they may be light rain or may be droplet movement or temperature. On `WET0002.CSV` (heavy rain) v8 detects wetting at 22:03 UTC, with the first rain signal at about 21:41.
 
@@ -256,7 +256,7 @@ The first gauge tip of the rain in `WET0011.CSV` (leaf and gauge both signal rai
 | 6 | `baseline_mv` | mV | The dry level. Follows slow drift while dry; frozen while wet or while rain is active. |
 | 7 | `above_base_mv` | mV | `mv` minus `baseline_mv`. The level the wet test uses. |
 | 8 | `rise10m_mv` | mV | `mv` minus the reading 10 minutes earlier. The rate the rain test uses. |
-| 9 | `activity_mv` | mV | Zig-zag over the last minute: the distance the reading travelled minus its net change, divided by the 5 steps. 0 for a smooth rise or fall. The test uses this for rain. |
+| 9 | `activity_mv` | mV | Zig-zag over the last minute: the distance the reading traveled minus its net change, divided by the 5 steps. 0 for a smooth rise or fall. The test uses this for rain. |
 | 10 | `rain_sig` | 0-3 | Rain signal this sample: 1 = leaf (rise reached `RAIN_RISE_MV` or activity reached `RAIN_ACTIVITY_MV`), 2 = gauge tip, 3 = both, 0 = none. |
 | 11 | `wet_dur_s` | s | Length of the current wet period, back-dated to when the signal began leaving the baseline. 0 when dry. |
 | 12 | `since_wet_s` | s | Time since the last wet period ended. 0 while wet or if the leaf has never been wet since boot. |
@@ -309,7 +309,7 @@ tkinter comes with most Python installs (on Debian/Ubuntu: `sudo apt install pyt
 
 | Tab | What it shows |
 |---|---|
-| Help | What the device measures, the colour key, a glossary, and a guide to each tab |
+| Help | What the device measures, the color key, a glossary, and a guide to each tab |
 | Overview | The log in plain words, a summary (rain, wet time, events, air) and a day-by-day table |
 | Timeline | Leaf reading shaded by state (RAIN, WET, DEW) with gauge tips, rain per 10 minutes and the running total, the rain evidence the firmware sees, and the air |
 | Rain events | Every rain event with its tips, duration, how many minutes the leaf noticed the rain before the gauge did, and a zoomed plot of the one you click. Events with no tip are the light rain or drizzle the gauge missed (or false alarms) |
@@ -320,8 +320,8 @@ tkinter comes with most Python installs (on Debian/Ubuntu: `sudo apt install pyt
 
 **Built-in help for new users:**
 
-- a **Help** tab (the first tab when you launch without a file) that explains what the device measures, the colour key, a glossary (mV, baseline, rain signal, zig-zag, hold, degree-days and so on), a section per tab on what to look for, and things to keep in mind;
-- a **colour key** in the top bar on every tab (DRY, WET, DEW, RAIN and the orange gauge tip), with a hover note on each;
+- a **Help** tab (the first tab when you launch without a file) that explains what the device measures, the color key, a glossary (mV, baseline, rain signal, zig-zag, hold, degree-days and so on), a section per tab on what to look for, and things to keep in mind;
+- a **color key** in the top bar on every tab (DRY, WET, DEW, RAIN and the orange gauge tip), with a hover note on each;
 - a short **note at the top of every tab** saying what you are looking at, with a **More help** button (or press F1) that jumps to the matching Help section; the **Help** menu has the same entries;
 - an **"In plain words"** paragraph at the top of the Overview tab that describes the open log in a few sentences;
 - **hover tips** on the time-offset box, the event-merge box and every tuning slider.

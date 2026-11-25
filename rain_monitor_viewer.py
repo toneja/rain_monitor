@@ -31,8 +31,8 @@ from matplotlib.figure import Figure
 #  Look
 # ---------------------------------------------------------------------------
 
-# Colour-blind-safe palette (Okabe-Ito)
-BLUE, ORANGE, GREEN, RED, PURPLE, SKY, GREY = (
+# Color-blind-safe palette (Okabe-Ito)
+BLUE, ORANGE, GREEN, RED, PURPLE, SKY, GRAY = (
     "#0072B2",
     "#E69F00",
     "#009E73",
@@ -42,7 +42,7 @@ BLUE, ORANGE, GREEN, RED, PURPLE, SKY, GREY = (
     "#6b7280",
 )
 
-# One fill colour per state, used by every plot and by the colour key in the window.
+# One fill color per state, used by every plot and by the color key in the window.
 STATE_FILL = {"DRY": "#f1ede4", "WET": "#d6eaf8", "DEW": "#bfe8e3", "RAIN": "#8fbce6"}
 
 matplotlib.rcParams.update(
@@ -74,7 +74,7 @@ DEFAULTS = dict(
 
 
 def zigzag(x, w):
-    """Distance travelled over the last w samples minus the net change, per step.
+    """Distance traveled over the last w samples minus the net change, per step.
     A smooth rise or fall scores 0; drops landing and running off score high."""
     x = np.asarray(x, dtype=float)
     n = len(x)
@@ -82,9 +82,9 @@ def zigzag(x, w):
     if n < w or w < 2:
         return out
     cs = np.cumsum(np.abs(np.diff(x, prepend=x[0])))
-    travelled = cs[w - 1 :] - cs[: n - w + 1]
+    traveled = cs[w - 1 :] - cs[: n - w + 1]
     net = np.abs(x[w - 1 :] - x[: n - w + 1])
-    out[w - 1 :] = (travelled - net) / (w - 1)
+    out[w - 1 :] = (traveled - net) / (w - 1)
     return out
 
 
@@ -437,7 +437,7 @@ def narrative(d, events):
 CAPTIONS = {
     "Overview": "The log in plain words, then the numbers. The table on the right is one row per day (your local time).",
     "Timeline": "Everything on one time axis. Top: the leaf sensor reading, shaded by what the logger decided "
-    "(colour key at the top of the window); orange ticks along the bottom are rain gauge tips. Below: rain "
+    "(color key at the top of the window); orange ticks along the bottom are rain gauge tips. Below: rain "
     "per 10 minutes with the running total, the evidence the logger uses to spot rain, and the air. "
     "Use the toolbar under the plot to zoom and pan.",
     "Rain events": "Each row is one stretch of rain, made by joining rain signals that are close together. "
@@ -473,7 +473,7 @@ HELP = [
                 "Leaf wetness sensor (PHYTOS31)",
                 "A flat sensor that reads higher the more water is on its surface. It reacts within seconds to the lightest "
                 "rain and shows how long the leaf stays wet afterwards, but it has no units of rain: it reads in millivolts "
-                "(mV), not millimetres.",
+                "(mV), not millimeters.",
             ),
             "From the two, the logger decides at every sample whether the leaf is dry, wet or being rained on, and counts "
             "the time since the last rain. When it rained, how much, and how long leaves stayed wet are the inputs that "
@@ -494,8 +494,8 @@ HELP = [
         ],
     ),
     (
-        "colours",
-        "Colour key",
+        "colors",
+        "Color key",
         [
             ("swatch", "DRY", "DRY: the leaf is at its dry level."),
             (
@@ -517,7 +517,7 @@ HELP = [
             "In the plots:",
             (
                 "bullet",
-                "Dark line: the leaf sensor reading in mV. Dashed grey line: the dry baseline it learned.",
+                "Dark line: the leaf sensor reading in mV. Dashed gray line: the dry baseline it learned.",
             ),
             (
                 "bullet",
@@ -646,7 +646,7 @@ HELP = [
         "Rain events",
         "Rain events tab",
         [
-            "Each row is an event: when it started and ended, how long, tips and millimetres, how many minutes before the first "
+            "Each row is an event: when it started and ended, how long, tips and millimeters, how many minutes before the first "
             "tip the leaf noticed it, and how far the leaf reading climbed.",
             (
                 "bullet",
@@ -753,7 +753,7 @@ def _time_axis(ax):
 
 def _note(ax, text):
     ax.text(
-        0.5, 0.5, text, transform=ax.transAxes, ha="center", va="center", color=GREY
+        0.5, 0.5, text, transform=ax.transAxes, ha="center", va="center", color=GRAY
     )
     ax.set_xticks([])
     ax.set_yticks([])
@@ -788,7 +788,7 @@ def plot_timeline(fig, d):
     a1.plot(d["t"], d["mv"], color="#1f2937", lw=0.9, label="leaf reading")
     if d["baseline_mv"].notna().any():
         a1.plot(
-            d["t"], d["baseline_mv"], color=GREY, lw=1, ls="--", label="dry baseline"
+            d["t"], d["baseline_mv"], color=GRAY, lw=1, ls="--", label="dry baseline"
         )
     _tip_ticks(a1, d, d["mv"].min() - 0.02 * (d["mv"].max() - d["mv"].min()))
     a1.set_ylabel("leaf, mV")
@@ -799,7 +799,7 @@ def plot_timeline(fig, d):
 
         for st, c in STATE_FILL.items():
             if (d["state"] == st).any():
-                handles.append(Patch(facecolor=c, edgecolor=GREY, linewidth=0.6))
+                handles.append(Patch(facecolor=c, edgecolor=GRAY, linewidth=0.6))
                 labels.append(st)
     a1.legend(handles, labels, ncol=6, loc="upper left")
 
@@ -843,7 +843,7 @@ def plot_timeline(fig, d):
         ha="center",
         va="top",
         fontsize=8,
-        color=GREY,
+        color=GRAY,
     )
 
     if d.attrs["has_air"]:
@@ -964,7 +964,7 @@ def plot_intensity(fig, d):
         f"correlation with tips: {r:.2f}",
         transform=a1.transAxes,
         ha="right",
-        color=GREY,
+        color=GRAY,
     )
 
     hourly = d.set_index("t")["tips"].resample("1h").sum() * 0.1
@@ -1065,7 +1065,7 @@ def plot_temperature(fig, d):
     a1, a2 = fig.subplots(
         2, 1, sharex=True, gridspec_kw=dict(height_ratios=[1.3, 1], hspace=0.12)
     )
-    a1.axhline(0, color=GREY, lw=0.8)
+    a1.axhline(0, color=GRAY, lw=0.8)
     a1.plot(d["t"], d["temp_c"], color=ORANGE, lw=1.1, label="temperature (in the box)")
     a1.plot(d["t"], d["dewpt_c"], color=SKY, lw=1, ls="--", label="dew point")
     a1.fill_between(
@@ -1221,6 +1221,7 @@ def export_png(d, outdir):
 def run_gui(paths, utc_offset):
     import tkinter as tk
     from tkinter import ttk, filedialog, messagebox
+    from tkinter import font as tkfont
     from matplotlib.backends.backend_tkagg import (
         FigureCanvasTkAgg,
         NavigationToolbar2Tk,
@@ -1328,7 +1329,7 @@ def run_gui(paths, utc_offset):
                 "and every plot and table is shown in local time.",
             )
 
-            # Colour key that stays visible on every tab
+            # Color key that stays visible on every tab
             key = ttk.Frame(bar)
             key.pack(side="right")
             ttk.Label(key, text="Key: ").pack(side="left")
@@ -1363,7 +1364,7 @@ def run_gui(paths, utc_offset):
                 label="What am I looking at?", command=lambda: self.show_help("start")
             )
             helpmenu.add_command(
-                label="Colour key", command=lambda: self.show_help("colours")
+                label="Color key", command=lambda: self.show_help("colors")
             )
             helpmenu.add_command(
                 label="Glossary", command=lambda: self.show_help("terms")
@@ -1405,8 +1406,25 @@ def run_gui(paths, utc_offset):
             self.add_caption(self.t_over, "Overview")
             paned = ttk.PanedWindow(self.t_over, orient="horizontal")
             paned.pack(fill="both", expand=True)
-            self.text = tk.Text(paned, font=("Courier", 10), wrap="none", width=70)
-            self.text.tag_configure("head", font=("Courier", 10, "bold"))
+            body_font, mono_font = self.pick_fonts()
+            self.text = tk.Text(
+                paned,
+                font=body_font,
+                wrap="word",
+                width=70,
+                padx=12,
+                pady=10,
+                spacing1=2,
+                spacing3=2,
+                cursor="arrow",
+            )
+            self.text.tag_configure(
+                "head",
+                font=(body_font[0], body_font[1], "bold"),
+                spacing1=10,
+                spacing3=4,
+            )
+            self.text.tag_configure("mono", font=mono_font)
             paned.add(self.text, weight=3)
             right = ttk.Frame(paned)
             paned.add(right, weight=2)
@@ -1604,9 +1622,9 @@ def run_gui(paths, utc_offset):
             )
             t.tag_configure("term", font=("TkDefaultFont", 11, "bold"))
             t.tag_configure("bullet", lmargin1=24, lmargin2=40)
-            for state, colour in STATE_FILL.items():
+            for state, color in STATE_FILL.items():
                 t.tag_configure(
-                    "sw_" + state, background=colour, borderwidth=1, relief="solid"
+                    "sw_" + state, background=color, borderwidth=1, relief="solid"
                 )
             for key, title, items in HELP:
                 t.mark_set("sec_" + key, "end-1c")
@@ -1646,6 +1664,36 @@ def run_gui(paths, utc_offset):
             for f in files:
                 self.open_file(f)
 
+        def pick_fonts(self):
+            """A readable proportional font for prose and a clear monospaced one for aligned columns."""
+            families = set(tkfont.families())
+
+            def first(names, fallback):
+                return next((n for n in names if n in families), fallback)
+
+            body = first(
+                [
+                    "Segoe UI",
+                    "SF Pro Text",
+                    "Helvetica Neue",
+                    "Ubuntu",
+                    "DejaVu Sans",
+                    "Arial",
+                ],
+                "TkDefaultFont",
+            )
+            mono = first(
+                [
+                    "Consolas",
+                    "Menlo",
+                    "DejaVu Sans Mono",
+                    "Ubuntu Mono",
+                    "Liberation Mono",
+                ],
+                "TkFixedFont",
+            )
+            return (body, 12), (mono, 11)
+
         def open_file(self, path):
             try:
                 d = load_log(path, self.offset.get())
@@ -1659,6 +1707,7 @@ def run_gui(paths, utc_offset):
             self.picker["values"] = list(self.logs)
             self.picker.set(name)
             self.set_data(d)
+            self.tabs.select(self.t_over)  # a newly opened log starts on the Overview
 
         def pick(self):
             self.reload_current()
@@ -1676,11 +1725,9 @@ def run_gui(paths, utc_offset):
             self.refresh_events()
             self.text.delete("1.0", "end")
             self.text.insert("end", "IN PLAIN WORDS\n", "head")
-            self.text.insert(
-                "end", textwrap.fill(narrative(d, self.events), 72) + "\n\n"
-            )
+            self.text.insert("end", narrative(d, self.events) + "\n\n")
             self.text.insert("end", "THE DETAILS\n", "head")
-            self.text.insert("end", summary_text(d, self.events))
+            self.text.insert("end", summary_text(d, self.events), "mono")
             for row in self.day_tree.get_children():
                 self.day_tree.delete(row)
             for _, r in daily_table(d).iterrows():

@@ -2,11 +2,13 @@
   Rain monitor
   ------------
   Detects and measures rainfall and tracks leaf wetness, to record the
-  conditions that favour fungal disease spread in a vineyard. Rain comes from two
-  sources that back each other up: a tipping bucket gauge (millimetres, but only
+  conditions that favor fungal disease spread in a vineyard. Rain comes from two
+  sources that back each other up: a tipping bucket gauge (millimeters, but only
   in 0.1 mm steps) and a leaf wetness sensor (responds to the lightest rain and
-  drizzle, but gives no millimetres). Each sample is logged to SD, shown on the
-  OLED, and summarised to Bluetooth peripherals.
+  drizzle, but gives no millimeters). Each sample is logged to SD, shown on the
+  OLED, and summarized to Bluetooth peripherals.
+
+  (Formerly the "leaf wetness logger", versions 1-10. Old versions are in archive/.)
 
   Hardware : RAK4631 core, PHYTOS31 leaf wetness sensor read through an
              Adafruit ADS1115 16-bit ADC, RAK1906 (BME680), RAK1921 OLED,
@@ -229,8 +231,8 @@ SFE_UBLOX_GNSS gnss;                                               // GPS
 BLEClientUart peripheralUart[MAX_PERIPHERALS];                     // one per connected peripheral
 
 LeafWetness wetness;
-RainHistory rainHistory;  // zero-initialised: empty history, first slot starts at power-on
-DegreeDays degreeDays;    // zero-initialised: nothing accumulated yet
+RainHistory rainHistory;  // zero-initialized: empty history, first slot starts at power-on
+DegreeDays degreeDays;    // zero-initialized: nothing accumulated yet
 
 // Written by the rain gauge interrupt, read with interrupts off (see readRainGauge).
 volatile uint32_t tipCount = 0;
@@ -411,21 +413,21 @@ bool rainIsActive(const LeafWetness& w, uint32_t nowMs) {
 }
 
 // How much the reading has been zig-zagging over the last minute: the distance
-// it travelled minus its net change, averaged per sample. Drops landing and
+// it traveled minus its net change, averaged per sample. Drops landing and
 // running off make it jump up and down, which gives 0.3 mV or more in rain.
 // A smooth rise or fall, such as a leaf drying, travels exactly as far as its
 // net change, so it scores zero however fast it moves. The window is short on
 // purpose: a longer one would keep reporting rain for minutes after it stopped.
 float windowActivity(const LeafWetness& w) {
   int newest = (w.historyNext + RISE_WINDOW_SAMPLES - 1) % RISE_WINDOW_SAMPLES;
-  float travelled = 0;
+  float traveled = 0;
   for (int i = 0; i < ZIGZAG_SAMPLES - 1; i++) {
     float later = w.history[(newest - i + RISE_WINDOW_SAMPLES) % RISE_WINDOW_SAMPLES];
     float earlier = w.history[(newest - i - 1 + RISE_WINDOW_SAMPLES) % RISE_WINDOW_SAMPLES];
-    travelled += fabs(later - earlier);
+    traveled += fabs(later - earlier);
   }
   float first = w.history[(newest - (ZIGZAG_SAMPLES - 1) + RISE_WINDOW_SAMPLES) % RISE_WINDOW_SAMPLES];
-  return (travelled - fabs(w.history[newest] - first)) / (ZIGZAG_SAMPLES - 1);
+  return (traveled - fabs(w.history[newest] - first)) / (ZIGZAG_SAMPLES - 1);
 }
 
 WetState chooseState(const LeafWetness& w, uint32_t nowMs) {
@@ -464,8 +466,8 @@ void addSample(LeafWetness& w, float leafMv, uint32_t tipsNow, uint32_t nowMs) {
 
 // First reading after power-up: use it as the baseline, unless the leaf is
 // already clearly wet, in which case fall back to a typical dry level. The cause
-// of that wetness is unknown, so it is labelled WET rather than DEW.
-void initialiseWetness(LeafWetness& w, float firstMv, uint32_t nowMs) {
+// of that wetness is unknown, so it is labeled WET rather than DEW.
+void initializeWetness(LeafWetness& w, float firstMv, uint32_t nowMs) {
   for (int i = 0; i < RISE_WINDOW_SAMPLES; i++) w.history[i] = firstMv;
   w.baselineMv = firstMv;
   w.lastNearBaseMs = nowMs;
@@ -836,7 +838,7 @@ void setup() {
   waitForGpsFix();
   startSdCard();
   startBluetooth();
-  initialiseWetness(wetness, readLeafMv(), millis());
+  initializeWetness(wetness, readLeafMv(), millis());
 
   DEBUG_PRINTLN(CSV_HEADER);
 }
