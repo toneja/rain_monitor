@@ -111,6 +111,10 @@ All tunables are at the top of the sketch. Millivolt values are the sensor's out
 | `MAX_PERIPHERALS` | 4 | Bluetooth peripherals the logger stays connected to |
 | `RAIN_HISTORY_HOURS` | 24 | Window for the rain total in the broadcast |
 | `DEGREE_DAY_BASE_C` | 0 | Degree-days count air temperature above this |
+| `GPS_RESYNC_MINUTES` | 360 | How often the sleeping GPS wakes to correct the internal clock |
+| `GPS_RETRY_MINUTES` | 30 | Sleep time before trying again after a wake-up found no fix |
+| `GPS_SYNC_TIMEOUT_S` | 180 | How long a wake-up waits for the time before giving up |
+| `GPS_MAX_CLOCK_ERROR_S` | 60 | A GPS time further than this from the internal clock is treated as stale and ignored |
 
 **Why `GAIN_TWO`:** the PHYTOS31 can output up to about half its supply (~1.65 V). `GAIN_FOUR` (+/-1.024 V) would clip a fully wet reading.
 
@@ -195,7 +199,7 @@ This is a heuristic from one leaf sensor. It cannot distinguish every case (see 
 | 4 | Time since rain was last detected (leaf rise or gauge tip) | `Rain 4h 10m ago` |
 | 5 | Rain gauge total and time since its last tip | `Gauge 12.3mm 4m 05s` |
 
-Warnings on row 0: `!SD` means the SD card is missing or a write failed, `!GPS` means the GPS has lost its time since startup.
+Warnings on row 0: `!SD` means the SD card is missing or a write failed, `!GPS` means the clock was never set from the GPS (it should not appear in normal use).
 
 While waiting for the GPS at startup the display shows `Waiting for GPS fix`, the number of satellites in view, and how long it has been waiting. Nothing is logged until the fix arrives.
 
@@ -248,8 +252,8 @@ The first gauge tip of the rain in `WET0011.CSV` (leaf and gauge both signal rai
 
 | # | Column | Unit | Description |
 |---|---|---|---|
-| 1 | `date` | `YYYY-MM-DD` | UTC date from the GPS. Empty only if the GPS loses its time after startup. |
-| 2 | `time` | `HH:MM:SS` | UTC time from the GPS. Empty only if the GPS loses its time after startup. |
+| 1 | `date` | `YYYY-MM-DD` | UTC date from the GPS-synchronized clock. |
+| 2 | `time` | `HH:MM:SS` | UTC time from the GPS-synchronized clock. |
 | 3 | `uptime_s` | s | Seconds since power-on. Always present. Wraps after about 49.7 days. |
 | 4 | `mv` | mV | PHYTOS31 output at ADS1115 A0, average of 8 reads. The live measurement. |
 | 5 | `state` | text | `DRY`, `DEW`, `RAIN` or `WET`. Updated every sample. |
@@ -333,6 +337,7 @@ Every plot has the matplotlib toolbar (zoom, pan, save as PNG). The "Tune the de
 - **Degree-days are only as good as `temp_c`.** Today that is the BME680 inside a sealed box, which reads warmer than the air in sun and lags the weather, so degree-days will run high. Re-check them once a shielded SHT31 is fitted. The total restarts at zero on every reset, so deploy on stable power or add the previous total back when analysing.
 - **Rain gauge counts are since boot.** A reset sets `tips_total` and `rain_mm` back to zero. A bucket that has not yet tipped holds some water, so the log lags the actual rain by up to 0.1 mm and by the time the next tip takes.
 - **No real-time clock.** Durations and `uptime_s` restart at every reset, and so do the baseline and totals. Real dates come from the GPS, and startup waits for it.
+- **GPS sleeps to save power.** After the first fix the GPS is put into its backup (off) mode, which saves roughly 25-40 mA, and timestamps come from the internal clock (about a second of drift per day). Every `GPS_RESYNC_MINUTES` it wakes and corrects the clock, usually within a minute or two, then sleeps again. If a wake-up gets no fix the clock keeps running and the GPS tries again after `GPS_RETRY_MINUTES`. This is checked in a desktop test build only; if your module takes much longer than a minute to wake, raise `GPS_SYNC_TIMEOUT_S`.
 - **No GPS, no logging.** Startup blocks until the GPS has the date and time, so a missing or blocked antenna stops the logger after boot.
 - **One sensor cannot always separate dew, fog, drizzle and irrigation.** The `state` column is a best guess from the rate of rise.
 - **Wet surfaces dry slowly.** In `WET0003.CSV` the sensor stayed 80-150 mV above its dry level for 14 hours of dark, cloudy, humid weather, and only started to dry in sun.

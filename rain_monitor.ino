@@ -75,7 +75,10 @@
   saved across resets.
 
   GPS: startup waits (showing a message on the OLED) until the GPS has the date
-  and time, so every row has a timestamp. Durations still use the internal clock.
+  and time, so every row has a timestamp. The GPS is the biggest power draw, so
+  once it has a fix it is put to sleep and the timestamps come from the internal
+  clock. Every GPS_RESYNC_MINUTES it wakes for a minute or two to correct that
+  clock (the clock drifts about a second a day), then sleeps again.
 */
 
 #include <Wire.h>
@@ -131,8 +134,14 @@ const int ADC_AVERAGING_SAMPLES = 8;
 const float RAIN_GAUGE_MM_PER_TIP = 0.1f;  // TR-525M: 0.1 mm (0.004 in) per tip
 const float DEGREE_DAY_BASE_C = 0.0f;      // degree-days count temperature above this
 const int RAIN_HISTORY_HOURS = 24;         // window for the rain_24h_mm value
-const uint32_t TIP_DEBOUNCE_MS = 50;       // ignore closures this soon after a counted tip
-                                           // (the switch stays closed ~135 ms per tip)
+
+// GPS power saving
+const uint32_t GPS_RESYNC_MINUTES = 360;    // how often the GPS wakes to correct the clock
+const uint32_t GPS_RETRY_MINUTES = 30;      // if a wake-up found no fix, try again after this
+const uint32_t GPS_SYNC_TIMEOUT_S = 180;    // give up on a wake-up after this long
+const uint32_t GPS_MAX_CLOCK_ERROR_S = 60;  // a GPS time further off than this is stale data
+const uint32_t TIP_DEBOUNCE_MS = 50;        // ignore closures this soon after a counted tip
+                                            // (the switch stays closed ~135 ms per tip)
 
 // ---- Is the leaf wet? (level test, millivolts above the dry baseline) ----
 const float WET_ON_MV = 20.0f;           // wet once this far above baseline
@@ -240,6 +249,12 @@ volatile uint32_t lastTipTimeMs = 0;
 uint32_t tipsAtLastSample = 0;
 bool airSensorReady = false;
 bool gnssReady = false;
+bool clockIsSet = false;  // true once the GPS has set the internal clock
+uint32_t clockEpoch = 0;  // seconds since 1970 (UTC) at clockSetMs
+uint32_t clockSetMs = 0;  // millis() when the clock was last set
+bool gnssAsleep = false;
+uint32_t gnssWakeMs = 0;        // millis() when the sleeping GPS should wake
+uint32_t gnssAwakeSinceMs = 0;  // millis() when the current wake-up began
 bool sdCardReady = false;
 char logFileName[16] = "";  // chosen at startup by chooseNewLogFileName()
 uint32_t lastSampleMs = 0;
@@ -359,17 +374,45 @@ float rainfallMm(const RainGauge& g) {
   return g.tipsTotal * RAIN_GAUGE_MM_PER_TIP;
 }
 
+// Days since 1970-01-01 for a calendar date (standard civil-date arithmetic).
+int32_t daysFromDate(int y, int m, int d) {
+  y -= (m <= 2);
+  int32_t era = (y >= 0 ? y : y - 399) / 400;
+  int32_t yoe = y - era * 400;
+  int32_t doy = (153 * (m + (m > 2 ? -3 : 9)) + 2) / 5 + d - 1;
+  int32_t doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
+  return era * 146097 + doe - 719468;
+}
+
+// The reverse of daysFromDate().
+void dateFromDays(int32_t z, int& y, int& m, int& d) {
+  z += 719468;
+  int32_t era = (z >= 0 ? z : z - 146096) / 146097;
+  int32_t doe = z - era * 146097;
+  int32_t yoe = (doe - doe / 1460 + doe / 36524 - doe / 146096) / 365;
+  int32_t doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+  int32_t mp = (5 * doy + 2) / 153;
+  d = doy - (153 * mp + 2) / 5 + 1;
+  m = mp + (mp < 10 ? 3 : -9);
+  y = yoe + era * 400 + (m <= 2);
+}
+
+// Seconds since 1970 according to the internal clock (valid once clockIsSet).
+uint32_t clockNowEpoch() {
+  return clockEpoch + (millis() - clockSetMs) / 1000;
+}
+
 UtcTime readUtcTime() {
   UtcTime t = { false, 0, 0, 0, 0, 0, 0 };
-  if (!gnssReady || !gnss.getDateValid() || !gnss.getTimeValid()) return t;
+  if (!clockIsSet) return t;
 
+  uint32_t epoch = clockNowEpoch();
+  uint32_t secondOfDay = epoch % 86400;
+  dateFromDays(epoch / 86400, t.year, t.month, t.day);
   t.valid = true;
-  t.year = gnss.getYear();
-  t.month = gnss.getMonth();
-  t.day = gnss.getDay();
-  t.hour = gnss.getHour();
-  t.minute = gnss.getMinute();
-  t.second = gnss.getSecond();
+  t.hour = secondOfDay / 3600;
+  t.minute = (secondOfDay % 3600) / 60;
+  t.second = secondOfDay % 60;
   return t;
 }
 
@@ -768,6 +811,70 @@ void startGnss() {
   gnss.saveConfigSelective(VAL_CFG_SUBSEC_IOPORT);   // remember that setting
 }
 
+// True if the GPS currently reports a valid date and time. On success, epoch is
+// that time in seconds since 1970.
+bool readGpsEpoch(uint32_t& epoch) {
+  if (!gnss.getDateValid() || !gnss.getTimeValid()) return false;
+  int32_t days = daysFromDate(gnss.getYear(), gnss.getMonth(), gnss.getDay());
+  epoch = (uint32_t)days * 86400UL + gnss.getHour() * 3600UL + gnss.getMinute() * 60UL + gnss.getSecond();
+  return true;
+}
+
+void setClock(uint32_t epoch) {
+  clockEpoch = epoch;
+  clockSetMs = millis();
+  clockIsSet = true;
+}
+
+// Puts the GPS to sleep; it wakes itself after the given number of minutes.
+void sleepGps(uint32_t minutes) {
+  gnss.powerOff(minutes * 60UL * 1000UL);
+  gnssAsleep = true;
+  gnssWakeMs = millis() + minutes * 60UL * 1000UL;
+  DEBUG_PRINT("# GPS asleep for ");
+  DEBUG_PRINT(minutes);
+  DEBUG_PRINTLN(" min");
+}
+
+// Runs every loop. When the GPS is due to wake, waits for it to report the time,
+// corrects the internal clock, and puts it back to sleep.
+void maintainGpsClock() {
+  uint32_t nowMs = millis();
+
+  if (gnssAsleep) {
+    if ((int32_t)(nowMs - gnssWakeMs) < 0) return;
+    gnssAsleep = false;
+    gnssAwakeSinceMs = nowMs;
+    gnss.setI2COutput(COM_TYPE_UBX);  // in case the sleep reset it
+    DEBUG_PRINTLN("# GPS awake, waiting for time");
+  }
+
+  static uint32_t lastPollMs = 0;
+  if (nowMs - lastPollMs < 1000) return;  // ask the GPS once a second
+  lastPollMs = nowMs;
+
+  uint32_t gpsEpoch;
+  if (readGpsEpoch(gpsEpoch)) {
+    // Data from before the sleep would be minutes or hours off, so a time far
+    // from our own clock is stale and is ignored.
+    uint32_t ourEpoch = clockNowEpoch();
+    uint32_t error = gpsEpoch > ourEpoch ? gpsEpoch - ourEpoch : ourEpoch - gpsEpoch;
+    if (error <= GPS_MAX_CLOCK_ERROR_S) {
+      DEBUG_PRINT("# GPS clock sync, correction ");
+      DEBUG_PRINT((long)gpsEpoch - (long)ourEpoch);
+      DEBUG_PRINTLN(" s");
+      setClock(gpsEpoch);
+      sleepGps(GPS_RESYNC_MINUTES);
+      return;
+    }
+  }
+
+  if (nowMs - gnssAwakeSinceMs > GPS_SYNC_TIMEOUT_S * 1000UL) {
+    DEBUG_PRINTLN("# GPS found no time, will retry");
+    sleepGps(GPS_RETRY_MINUTES);
+  }
+}
+
 // Finds the first unused file name so every boot gets a fresh file and earlier
 // logs are never touched.
 bool chooseNewLogFileName() {
@@ -779,13 +886,17 @@ bool chooseNewLogFileName() {
 }
 
 // Blocks until the GPS knows the date and time. Nothing is logged until then.
+// Then the internal clock is set from it and the GPS goes to sleep.
 void waitForGpsFix() {
   uint32_t startMs = millis();
-  while (!(gnss.getDateValid() && gnss.getTimeValid())) {
+  uint32_t epoch;
+  while (!readGpsEpoch(epoch)) {
     drawGpsWait(secondsBetween(millis(), startMs));
     DEBUG_PRINTLN("# Waiting for GPS fix");
     delay(1000);
   }
+  setClock(epoch);
+  sleepGps(GPS_RESYNC_MINUTES);
 }
 
 void startSdCard() {
@@ -849,6 +960,7 @@ void setup() {
 // =============================================================================
 
 void loop() {
+  maintainGpsClock();
   uint32_t nowMs = millis();
   if (nowMs - lastSampleMs < SAMPLE_INTERVAL_MS) return;
   lastSampleMs = nowMs;
