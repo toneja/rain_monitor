@@ -199,11 +199,14 @@ This is a heuristic from one leaf sensor. It cannot distinguish every case (see 
 | 4 | Time since rain was last detected (leaf rise or gauge tip) | `Rain 4h 10m ago` |
 | 5 | Rain gauge total and time since its last tip | `Gauge 12.3mm 4m 05s` |
 
-Warnings on row 0: `!SD` means the SD card is missing or a write failed, `!GPS` means the clock was never set from the GPS (it should not appear in normal use).
+Warnings on row 0: `!SD` means there is no card logging (missing, removed, or failed to start), `!GPS` means the clock was never set from the GPS (it should not appear in normal use).
 
 While waiting for the GPS at startup the display shows `Waiting for GPS fix`, the number of satellites in view, and how long it has been waiting. Nothing is logged until the fix arrives.
 
 ### Serial and SD card
+
+The RAK15002 card-detect switch (WB_IO6) is watched continuously. A device booted with no card starts logging as soon as one is inserted, into a new `RAINnnnn.CSV` file with its own header. Removing the card stops writes at once, and putting a card back starts yet another new file. Rows sampled while no card is in are not saved (they still go to Serial in debug builds), and the switch must hold steady for half a second, so vibration does not create stray files. The pin, its polarity and the timings are `SD_DETECT_PIN`, `SD_DETECT_DEBOUNCE_MS` and `SD_RETRY_MS`; the polarity (low = inserted) is from the RAK15002 datasheet and has only been tested in a desktop build, so confirm `!SD` clears when you insert a card.
+
 
 Each sample produces one CSV row. Serial (debug builds only) prints the header at boot. Every boot starts a **new SD file** (`RAIN0001.CSV`, `RAIN0002.CSV`, ...) with the header as its first line; existing files are never appended to. In debug builds the chosen name is printed on Serial at startup (`# Logging to WET0003.CSV`). File names use the 8.3 format so they work with any SD library. Lines starting with `#` on Serial are status messages, not data.
 
@@ -355,7 +358,8 @@ Every plot has the matplotlib toolbar (zoom, pan, save as PNG). The "Tune the de
 | OLED shows `# ADS1115 not found` (and Serial repeats it when `DEBUG` is 1) | ADC wiring, power on 3V3_S, I2C address `0x48`. The sketch stops until the ADC is found. |
 | `# RAK1906 not found` | Module seated in its slot. Logging continues with `nan` air values. |
 | `# GPS not found` | Module and I2C wiring. The logger stops with this message, because every row needs a timestamp. |
-| `# SD card not found` / `!SD` on OLED | Card seated and FAT-formatted. Logging continues on Serial in debug builds. |
+| `# No SD card; logging starts when one is inserted` / `!SD` on OLED | No card detected on the RAK15002 card-detect switch (WB_IO6, low when inserted). Insert one; logging starts about a second later in a new file. |
+| `# SD card could not be started` | The card is detected but will not initialize. Check it is FAT-formatted. The logger retries every 5 s. |
 | `# No free log file name on SD card` | All 9999 file names are used. Archive or delete old `WET*.CSV` files. |
 | Blank or upside-down OLED | `U8G2_R2` rotates 180 degrees (use `U8G2_R0` for the other way). Confirm the I2C address and module. |
 | State stuck on `DRY` during rain | Check `above_base_mv` and `rise10m_mv`. Wetting needs `WET_ON_MV` above baseline; light rain that never gets there stays `DRY` but still logs `rain_sig`. |

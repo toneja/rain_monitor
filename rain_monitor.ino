@@ -21,6 +21,7 @@
     PHYTOS31  supply -> 3V3_S,  ground -> GND,  signal -> ADS1115 A0
     ADS1115   VDD -> 3V3_S,  GND -> GND,  SDA/SCL -> the WisBlock I2C bus (address 0x48)
     TR-525M   one reed switch lead -> WB_IO3,  the other -> GND  (polarity does not matter)
+    RAK15002  card-detect switch on WB_IO6 (low when a card is inserted); no extra wiring
 
   How rain and wetness are judged (two separate questions, both answered every 10 s):
 
@@ -118,8 +119,11 @@ const uint8_t BME680_I2C_ADDRESS = 0x76;  // RAK1906
 // Each boot starts a new log file: RAIN0001.CSV, RAIN0002.CSV, ... (8.3 names work on any SD library).
 const char* LOG_FILE_PATTERN = "RAIN%04d.CSV";
 const int MAX_LOG_FILES = 9999;
-const int MAX_PERIPHERALS = 4;      // BLE devices the logger will stay connected to
-const int RAIN_GAUGE_PIN = WB_IO3;  // TR-525M reed switch to GND
+const int MAX_PERIPHERALS = 4;               // BLE devices the logger will stay connected to
+const int RAIN_GAUGE_PIN = WB_IO3;           // TR-525M reed switch to GND
+const int SD_DETECT_PIN = WB_IO6;            // RAK15002 card-detect switch: LOW = card inserted
+const uint32_t SD_DETECT_DEBOUNCE_MS = 500;  // card-detect must hold steady this long to count
+const uint32_t SD_RETRY_MS = 5000;           // between attempts to start logging on a present card
 
 // ---- Timing ----
 const uint32_t SAMPLE_INTERVAL_MS = 10000;  // one reading (and one CSV row) per sample
@@ -253,10 +257,14 @@ bool clockIsSet = false;  // true once the GPS has set the internal clock
 uint32_t clockEpoch = 0;  // seconds since 1970 (UTC) at clockSetMs
 uint32_t clockSetMs = 0;  // millis() when the clock was last set
 bool gnssAsleep = false;
-uint32_t gnssWakeMs = 0;        // millis() when the sleeping GPS should wake
-uint32_t gnssAwakeSinceMs = 0;  // millis() when the current wake-up began
-bool sdCardReady = false;
-char logFileName[16] = "";  // chosen at startup by chooseNewLogFileName()
+uint32_t gnssWakeMs = 0;         // millis() when the sleeping GPS should wake
+uint32_t gnssAwakeSinceMs = 0;   // millis() when the current wake-up began
+bool sdCardReady = false;        // a log file is open for appending
+bool sdCardInserted = false;     // debounced state of the card-detect switch
+bool sdDetectRaw = false;        // latest raw reading of the switch
+uint32_t sdDetectChangedMs = 0;  // when the raw reading last changed
+uint32_t sdLastTryMs = 0;        // when we last tried to start logging
+char logFileName[16] = "";       // chosen at startup by chooseNewLogFileName()
 uint32_t lastSampleMs = 0;
 
 
@@ -899,10 +907,14 @@ void waitForGpsFix() {
   sleepGps(GPS_RESYNC_MINUTES);
 }
 
+bool readSdDetectSwitch() {
+  return digitalRead(SD_DETECT_PIN) == LOW;
+}
+
 void startSdCard() {
   sdCardReady = SD.begin();
   if (!sdCardReady) {
-    DEBUG_PRINTLN("# SD card not found");
+    DEBUG_PRINTLN("# SD card could not be started");
     return;
   }
   if (!chooseNewLogFileName()) {
@@ -913,6 +925,30 @@ void startSdCard() {
   appendToLogFile(CSV_HEADER);
   DEBUG_PRINT("# Logging to ");
   DEBUG_PRINTLN(logFileName);
+}
+
+// Runs every loop. Follows the card-detect switch so a card can be inserted or
+// removed at any time: removal stops writes at once, and a card inserted later
+// (or one that failed to start) gets a new log file.
+void maintainSdCard() {
+  uint32_t nowMs = millis();
+
+  bool raw = readSdDetectSwitch();
+  if (raw != sdDetectRaw) {
+    sdDetectRaw = raw;
+    sdDetectChangedMs = nowMs;
+  }
+  if (raw != sdCardInserted && nowMs - sdDetectChangedMs >= SD_DETECT_DEBOUNCE_MS) {
+    sdCardInserted = raw;
+    sdCardReady = false;                // a different card, or none
+    sdLastTryMs = nowMs - SD_RETRY_MS;  // try straight away
+    DEBUG_PRINTLN(sdCardInserted ? "# SD card inserted" : "# SD card removed");
+  }
+
+  if (sdCardInserted && !sdCardReady && nowMs - sdLastTryMs >= SD_RETRY_MS) {
+    sdLastTryMs = nowMs;
+    startSdCard();
+  }
 }
 
 void startBluetooth() {
@@ -947,7 +983,10 @@ void setup() {
   startAirSensor();
   startGnss();
   waitForGpsFix();
-  startSdCard();
+  pinMode(SD_DETECT_PIN, INPUT_PULLUP);
+  sdDetectRaw = sdCardInserted = readSdDetectSwitch();
+  if (sdCardInserted) startSdCard();
+  else DEBUG_PRINTLN("# No SD card; logging starts when one is inserted");
   startBluetooth();
   initializeWetness(wetness, readLeafMv(), millis());
 
@@ -961,6 +1000,7 @@ void setup() {
 
 void loop() {
   maintainGpsClock();
+  maintainSdCard();
   uint32_t nowMs = millis();
   if (nowMs - lastSampleMs < SAMPLE_INTERVAL_MS) return;
   lastSampleMs = nowMs;
